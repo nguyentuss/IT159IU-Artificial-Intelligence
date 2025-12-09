@@ -181,33 +181,49 @@ class StaticGraphColoringEnvironment:
         return self._get_state()
     
     def _get_state(self):
-        """Get current state."""
+        """Get current state (fully vectorized)."""
         t = min(self.step_count, self.num_nodes - 1)
         
-        # Color one-hot encoding
+        # Color one-hot encoding - VECTORIZED
+        # self.colors is [batch, nodes], values 0 to num_colors
+        # Create one-hot: [batch, nodes, num_colors+1]
         color_onehot = torch.zeros(self.batch_size, self.num_nodes, self.num_colors + 1, device=self.device)
-        for i in range(self.batch_size):
-            for n in range(self.num_nodes):
-                c = self.colors[i, n].item()
-                color_onehot[i, n, c] = 1.0
+        batch_idx = torch.arange(self.batch_size, device=self.device).unsqueeze(1).expand(-1, self.num_nodes)
+        node_idx = torch.arange(self.num_nodes, device=self.device).unsqueeze(0).expand(self.batch_size, -1)
+        color_onehot[batch_idx, node_idx, self.colors] = 1.0
         
         # Current node indicator
         is_current = torch.zeros(self.batch_size, self.num_nodes, device=self.device)
         is_current[:, t] = 1.0
         
-        # Blocked colors for current node (0-indexed for colors 1 to num_colors)
-        # Use float for compatibility with model
-        blocked = torch.zeros(self.batch_size, self.num_colors, device=self.device)
-        for i in range(self.batch_size):
-            neighbors = self.adjacency[i, t, :].nonzero(as_tuple=True)[0]
-            for n in neighbors:
-                c = self.colors[i, n].item()
-                if c > 0 and c <= self.num_colors:  # c is 1-indexed, convert to 0-indexed
-                    blocked[i, c - 1] = 1.0
+        # Blocked colors for current node - VECTORIZED
+        # Get neighbor mask for node t: [batch, num_nodes]
+        neighbor_mask = self.adjacency[:, t, :]  # [batch, num_nodes]
+        
+        # Get colors of all nodes: [batch, num_nodes]
+        neighbor_colors = self.colors  # [batch, num_nodes]
+        
+        # Create blocked tensor using scatter: [batch, num_colors]
+        # neighbor_colors: [batch, num_nodes], neighbor_mask: [batch, num_nodes]
+        # We want to mark color c as blocked if any neighbor has color c
+        
+        # Create one-hot for neighbor colors (only for colors 1..num_colors)
+        # neighbor_colors_one_hot: [batch, num_nodes, num_colors]
+        neighbor_colors_one_hot = torch.zeros(self.batch_size, self.num_nodes, self.num_colors, device=self.device)
+        valid_color_mask = (neighbor_colors >= 1) & (neighbor_colors <= self.num_colors)
+        # Scatter: set to 1 where color matches
+        color_indices = (neighbor_colors - 1).clamp(min=0)  # 0-indexed for colors 1..num_colors
+        neighbor_colors_one_hot.scatter_(2, color_indices.unsqueeze(-1), 1.0)
+        # Zero out where original color was 0 (uncolored)
+        neighbor_colors_one_hot = neighbor_colors_one_hot * valid_color_mask.unsqueeze(-1).float()
+        
+        # Multiply by neighbor_mask and sum: blocked[batch, c] = sum over nodes of (neighbor_mask * has_color_c)
+        # neighbor_mask: [batch, num_nodes] -> [batch, num_nodes, 1]
+        blocked = (neighbor_mask.unsqueeze(-1) * neighbor_colors_one_hot).sum(dim=1) > 0
+        blocked = blocked.float()
         
         # Valid actions (unblocked colors) - ensure at least one is valid
         valid = (blocked == 0)
-        # If all blocked, allow all (force a conflict, better than NaN)
         all_blocked = ~valid.any(dim=-1, keepdim=True)
         valid = valid | all_blocked.expand_as(valid)
         
@@ -226,25 +242,37 @@ class StaticGraphColoringEnvironment:
         }
     
     def step(self, action):
-        """Execute action (1-indexed color)."""
+        """Execute action (1-indexed color) - fully vectorized."""
         t = self.step_count
         
-        # Check for conflicts
-        new_conflicts = torch.zeros(self.batch_size, device=self.device)
-        for i in range(self.batch_size):
-            neighbors = self.adjacency[i, t, :].nonzero(as_tuple=True)[0]
-            for n in neighbors:
-                if self.colors[i, n] == action[i]:
-                    new_conflicts[i] += 1
+        # Check for conflicts - VECTORIZED
+        # Get neighbor mask for node t
+        neighbor_mask = self.adjacency[:, t, :]  # [batch, num_nodes]
         
-        # Track new colors
-        was_new_color = torch.zeros(self.batch_size, device=self.device)
-        for i in range(self.batch_size):
-            c = action[i].item()
-            used_colors = set(self.colors[i].tolist()) - {0}
-            if c not in used_colors:
-                was_new_color[i] = 1.0
-                self.colors_used[i] += 1
+        # Get colors of neighbors
+        neighbor_colors = self.colors  # [batch, num_nodes]
+        
+        # Check which neighbors have the same color as action
+        # action is [batch], expand to [batch, num_nodes]
+        action_expanded = action.unsqueeze(1).expand(-1, self.num_nodes)
+        
+        # Conflict if neighbor has same color AND is a neighbor
+        same_color = (neighbor_colors == action_expanded)  # [batch, num_nodes]
+        new_conflicts = (neighbor_mask * same_color).sum(dim=1).float()  # [batch]
+        
+        # Track new colors - VECTORIZED
+        # Create mask for all colors used so far (excluding 0)
+        # colors_one_hot shape: [batch, num_colors] indicating which colors 1..num_colors are used
+        # Check if action color exists in current colors
+        batch_idx = torch.arange(self.batch_size, device=self.device)
+        
+        # For each batch, check if action[i] already exists in self.colors[i]
+        # Expand action to compare with all nodes
+        action_match = (self.colors == action.unsqueeze(1))  # [batch, num_nodes]
+        color_exists = action_match.any(dim=1)  # [batch]
+        
+        was_new_color = (~color_exists).float()
+        self.colors_used += was_new_color
         
         # Assign colors
         self.colors[:, t] = action
