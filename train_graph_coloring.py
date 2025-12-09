@@ -5,6 +5,7 @@ Uses static DIMACS .col format graphs for curriculum learning.
 """
 
 import argparse
+import json
 import os
 import torch
 import torch.nn as nn
@@ -459,6 +460,7 @@ def train(args):
         print(f"  Loaded weights, starting fresh epochs for new dataset")
     
     # Training loop
+    history = []  # Track training history
     pbar = tqdm(range(1, args.epochs + 1), desc=f'Training on {graph["name"]}')
     
     for epoch in pbar:
@@ -474,6 +476,17 @@ def train(args):
             'conflicts': f"{avg_conflicts:.1f}",
             'colors': f"{avg_colors:.1f}",
             'valid': f"{valid_ratio:.0%}",
+        })
+        
+        # Record history every epoch
+        history.append({
+            'epoch': epoch,
+            'avg_conflicts': avg_conflicts,
+            'avg_colors': avg_colors,
+            'valid_ratio': valid_ratio,
+            'policy_loss': metrics['policy_loss'],
+            'value_loss': metrics['value_loss'],
+            'entropy': metrics['entropy'],
         })
         
         if epoch % args.log_interval == 0:
@@ -508,6 +521,20 @@ def train(args):
         'graph': graph['name'],
     }, final_path)
     print(f"Saved final model to {final_path}")
+    
+    # Save training history
+    history_path = os.path.join(args.output_dir, f'{args.exp_name}_history.json')
+    with open(history_path, 'w') as f:
+        json.dump({
+            'problem_type': 'graph_coloring',
+            'graph': graph['name'],
+            'num_nodes': graph['num_nodes'],
+            'num_edges': graph['num_edges'],
+            'num_colors': args.num_colors,
+            'args': vars(args),
+            'history': history,
+        }, f, indent=2)
+    print(f"Saved training history to {history_path}")
 
 
 if __name__ == '__main__':

@@ -5,6 +5,7 @@ Uses static datasets (CSV files with city coordinates).
 """
 
 import argparse
+import json
 import os
 import torch
 import torch.nn as nn
@@ -357,6 +358,7 @@ def train(args):
         print(f"  Loaded weights, starting fresh epochs for new dataset")
     
     # Training loop
+    history = []  # Track training history
     best_tour = float('inf')
     pbar = tqdm(range(1, args.epochs + 1), desc=f'Training on {dataset["name"]}')
     
@@ -374,6 +376,17 @@ def train(args):
         pbar.set_postfix({
             'tour': f"{avg_tour:.2f}",
             'best': f"{best_tour:.2f}",
+        })
+        
+        # Record history every epoch
+        history.append({
+            'epoch': epoch,
+            'avg_tour': avg_tour,
+            'min_tour': min_tour,
+            'best_tour': best_tour,
+            'policy_loss': metrics['policy_loss'],
+            'value_loss': metrics['value_loss'],
+            'entropy': metrics['entropy'],
         })
         
         if epoch % args.log_interval == 0:
@@ -410,6 +423,19 @@ def train(args):
         'best_tour': best_tour,
     }, final_path)
     print(f"Saved final model to {final_path}")
+    
+    # Save training history
+    history_path = os.path.join(args.output_dir, f'{args.exp_name}_history.json')
+    with open(history_path, 'w') as f:
+        json.dump({
+            'problem_type': 'tsp',
+            'dataset': dataset['name'],
+            'num_cities': dataset['num_cities'],
+            'best_tour': best_tour,
+            'args': vars(args),
+            'history': history,
+        }, f, indent=2)
+    print(f"Saved training history to {history_path}")
 
 
 if __name__ == '__main__':

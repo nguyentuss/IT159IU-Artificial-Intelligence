@@ -5,6 +5,7 @@ Uses static datasets (p01-p08) for curriculum learning.
 """
 
 import argparse
+import json
 import os
 import torch
 import torch.nn as nn
@@ -405,6 +406,7 @@ def train(args):
         print(f"  Loaded weights, starting fresh epochs for new dataset")
     
     # Training loop
+    history = []  # Track training history
     pbar = tqdm(range(1, args.epochs + 1), desc=f'Training on {dataset["name"]}')
     
     for epoch in pbar:
@@ -420,6 +422,17 @@ def train(args):
             'value': f"{avg_value:.1f}/{dataset['optimal_value']}",
             'opt%': f"{opt_ratio:.1f}%",
             'feasible': f"{feasible_ratio:.0%}",
+        })
+        
+        # Record history every epoch
+        history.append({
+            'epoch': epoch,
+            'avg_value': avg_value,
+            'opt_ratio': opt_ratio,
+            'feasible_ratio': feasible_ratio,
+            'policy_loss': metrics['policy_loss'],
+            'value_loss': metrics['value_loss'],
+            'entropy': metrics['entropy'],
         })
         
         if epoch % args.log_interval == 0:
@@ -453,6 +466,18 @@ def train(args):
         'dataset': dataset['name'],
     }, final_path)
     print(f"Saved final model to {final_path}")
+    
+    # Save training history
+    history_path = os.path.join(args.output_dir, f'{args.exp_name}_history.json')
+    with open(history_path, 'w') as f:
+        json.dump({
+            'problem_type': 'knapsack',
+            'dataset': dataset['name'],
+            'optimal_value': dataset['optimal_value'],
+            'args': vars(args),
+            'history': history,
+        }, f, indent=2)
+    print(f"Saved training history to {history_path}")
 
 
 if __name__ == '__main__':
