@@ -7,10 +7,9 @@ set -e
 
 OUTPUT_DIR="./checkpoints/graph_coloring_curriculum"
 EXP_NAME="gc_curriculum"
-EPOCHS=100
-DEVICE="cpu"  # Change to cuda:0 for GPU
+EPOCHS=20
+DEVICE="cuda:1"  # Change to cuda:0 for GPU
 NUM_COLORS=8  # Fixed for all stages (myciel7 needs 8)
-BATCH_SIZE=512  # Increase for better GPU utilization (1024+ for A100)
 
 echo "=== Graph Coloring Curriculum Training ==="
 echo "Output: $OUTPUT_DIR"
@@ -26,7 +25,7 @@ python train_graph_coloring.py \
     --epochs $EPOCHS \
     --output_dir $OUTPUT_DIR \
     --exp_name ${EXP_NAME}_myciel2 \
-    --batch_size $BATCH_SIZE --device $DEVICE
+    --device $DEVICE
 
 # myciel3 - 11 nodes
 echo "[2/6] Training on myciel3..."
@@ -37,7 +36,7 @@ python train_graph_coloring.py \
     --output_dir $OUTPUT_DIR \
     --exp_name ${EXP_NAME}_myciel3 \
     --resume ${OUTPUT_DIR}/${EXP_NAME}_myciel2_final.pt \
-    --batch_size $BATCH_SIZE --device $DEVICE
+    --device $DEVICE
 
 # myciel4 - 23 nodes
 echo "[3/6] Training on myciel4..."
@@ -48,7 +47,7 @@ python train_graph_coloring.py \
     --output_dir $OUTPUT_DIR \
     --exp_name ${EXP_NAME}_myciel4 \
     --resume ${OUTPUT_DIR}/${EXP_NAME}_myciel3_final.pt \
-    --batch_size $BATCH_SIZE --device $DEVICE
+    --device $DEVICE
 
 # myciel5 - 47 nodes
 echo "[4/6] Training on myciel5..."
@@ -59,7 +58,7 @@ python train_graph_coloring.py \
     --output_dir $OUTPUT_DIR \
     --exp_name ${EXP_NAME}_myciel5 \
     --resume ${OUTPUT_DIR}/${EXP_NAME}_myciel4_final.pt \
-    --batch_size $BATCH_SIZE --device $DEVICE
+    --device $DEVICE
 
 # myciel6 - 95 nodes
 echo "[5/6] Training on myciel6..."
@@ -70,7 +69,7 @@ python train_graph_coloring.py \
     --output_dir $OUTPUT_DIR \
     --exp_name ${EXP_NAME}_myciel6 \
     --resume ${OUTPUT_DIR}/${EXP_NAME}_myciel5_final.pt \
-    --batch_size $BATCH_SIZE --device $DEVICE
+    --device $DEVICE
 
 # myciel7 - 191 nodes
 echo "[6/6] Training on myciel7..."
@@ -81,7 +80,7 @@ python train_graph_coloring.py \
     --output_dir $OUTPUT_DIR \
     --exp_name ${EXP_NAME}_myciel7 \
     --resume ${OUTPUT_DIR}/${EXP_NAME}_myciel6_final.pt \
-    --batch_size $BATCH_SIZE --device $DEVICE
+    --device $DEVICE
 
 echo ""
 echo "=== Curriculum training complete! ==="

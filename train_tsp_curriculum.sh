@@ -6,9 +6,9 @@ set -e
 
 OUTPUT_DIR="./checkpoints/tsp_curriculum"
 EXP_NAME="tsp_curriculum"
-EPOCHS=1000
-DEVICE="cpu"  # Change to cuda:0 for GPU
-BATCH_SIZE=512  # Increase for better GPU utilization (1024+ for A100)
+EPOCHS=30
+DEVICE="cuda:1"  # Change to cuda:0 for GPU
+BATCH_SIZE=128
 
 echo "=== TSP Curriculum Training ==="
 echo "Output: $OUTPUT_DIR"
@@ -24,35 +24,47 @@ python train_tsp.py \
     --exp_name ${EXP_NAME}_tiny \
     --batch_size $BATCH_SIZE --device $DEVICE
 
+# small-1 - 20 cities
+echo "[2/4] Training on small-1.csv (20 cities)..."
+python train_tsp.py \
+    --data_file data/tsp/small.csv \
+    --epochs $EPOCHS \
+    --output_dir $OUTPUT_DIR \
+    --exp_name ${EXP_NAME}_small-1 \
+    --resume ${OUTPUT_DIR}/${EXP_NAME}_tiny_final.pt \
+    --batch_size $BATCH_SIZE --device $DEVICE
+
+
+# small-2 - 25 cities
+echo "[2/4] Training on small-1.csv (25 cities)..."
+python train_tsp.py \
+    --data_file data/tsp/small.csv \
+    --epochs $EPOCHS \
+    --output_dir $OUTPUT_DIR \
+    --exp_name ${EXP_NAME}_small-2 \
+    --resume ${OUTPUT_DIR}/${EXP_NAME}_small-1_final.pt \
+    --batch_size $BATCH_SIZE --device $DEVICE
+    
 # small - 30 cities
-echo "[2/4] Training on small.csv (30 cities)..."
+echo "[4/4] Training on small.csv (30 cities)..."
 python train_tsp.py \
     --data_file data/tsp/small.csv \
     --epochs $EPOCHS \
     --output_dir $OUTPUT_DIR \
     --exp_name ${EXP_NAME}_small \
-    --resume ${OUTPUT_DIR}/${EXP_NAME}_tiny_final.pt \
+    --resume ${OUTPUT_DIR}/${EXP_NAME}_small-2_final.pt \
     --batch_size $BATCH_SIZE --device $DEVICE
 
-# medium - 100 cities
-echo "[3/4] Training on medium.csv (100 cities)..."
-python train_tsp.py \
-    --data_file data/tsp/medium.csv \
-    --epochs $EPOCHS \
-    --output_dir $OUTPUT_DIR \
-    --exp_name ${EXP_NAME}_medium \
-    --resume ${OUTPUT_DIR}/${EXP_NAME}_small_final.pt \
-    --batch_size $BATCH_SIZE --device $DEVICE
+# # medium - 100 cities
+# echo "[3/4] Training on medium.csv (100 cities)..."
+# python train_tsp.py \
+#     --data_file data/tsp/medium.csv \
+#     --epochs $EPOCHS \
+#     --output_dir $OUTPUT_DIR \
+#     --exp_name ${EXP_NAME}_medium \
+#     --resume ${OUTPUT_DIR}/${EXP_NAME}_small_final.pt \
+#     --batch_size $BATCH_SIZE --device $DEVICE
 
-# large - 1000 cities
-echo "[4/4] Training on large.csv (1000 cities)..."
-python train_tsp.py \
-    --data_file data/tsp/large.csv \
-    --epochs $EPOCHS \
-    --output_dir $OUTPUT_DIR \
-    --exp_name ${EXP_NAME}_large \
-    --resume ${OUTPUT_DIR}/${EXP_NAME}_medium_final.pt \
-    --batch_size $BATCH_SIZE --device $DEVICE
 
 echo ""
 echo "=== Curriculum training complete! ==="
