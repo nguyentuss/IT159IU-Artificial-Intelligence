@@ -14,6 +14,7 @@ from tqdm import tqdm
 
 from ppo_combinatorial.models.tsp_model import TSPPolicyNetwork, TSPValueNetwork
 from ppo_combinatorial.core.ppo import compute_gae, compute_ppo_loss
+from solve_tsp_optimal import solve_tsp_optimal
 
 
 def parse_args():
@@ -326,6 +327,11 @@ def train(args):
     print(f"  Cities: {dataset['num_cities']}")
     print(f"Device: {args.device}")
     
+    # Compute optimal tour
+    print("Computing optimal tour...")
+    optimal_tour, method = solve_tsp_optimal(args.data_file)
+    print(f"  Optimal tour: {optimal_tour:.4f} ({method})")
+    
     os.makedirs(args.output_dir, exist_ok=True)
     
     # Create environment
@@ -431,6 +437,7 @@ def train(args):
             'problem_type': 'tsp',
             'dataset': dataset['name'],
             'num_cities': dataset['num_cities'],
+            'optimal_tour': optimal_tour,
             'best_tour': best_tour,
             'args': vars(args),
             'history': history,

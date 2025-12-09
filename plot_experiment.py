@@ -47,6 +47,7 @@ def plot_knapsack(histories, labels, output_path=None):
     axes[0, 0].set_xlabel('Epoch')
     axes[0, 0].set_ylabel('Optimality Ratio (%)')
     axes[0, 0].set_title('Value vs Optimal (%)')
+    axes[0, 0].axhline(y=100, color='green', linestyle='--', linewidth=2, label='Optimal (100%)', alpha=0.7)
     axes[0, 0].legend(loc='best', fontsize=8)
     axes[0, 0].grid(True, alpha=0.3)
     
@@ -115,6 +116,13 @@ def plot_graph_coloring(histories, labels, output_path=None):
     axes[0, 1].set_xlabel('Epoch')
     axes[0, 1].set_ylabel('Colors Used')
     axes[0, 1].set_title('Average Colors Used')
+    # Add chromatic number reference line if available
+    chromatic_numbers = [h.get('chromatic_number') for h in histories if h.get('chromatic_number')]
+    if chromatic_numbers:
+        # Use the max chromatic number as reference (for curriculum)
+        max_chromatic = max(chromatic_numbers)
+        axes[0, 1].axhline(y=max_chromatic, color='green', linestyle='--', linewidth=2, 
+                          label=f'Chromatic Number ({max_chromatic})', alpha=0.7)
     axes[0, 1].legend(loc='best', fontsize=8)
     axes[0, 1].grid(True, alpha=0.3)
     
@@ -171,12 +179,24 @@ def plot_tsp(histories, labels, output_path=None):
     axes[0, 0].set_xlabel('Epoch')
     axes[0, 0].set_ylabel('Tour Length')
     axes[0, 0].set_title('Average Tour Length')
+    # Add optimal tour reference line if available
+    optimal_tours = [h.get('optimal_tour') for h in histories if h.get('optimal_tour')]
+    if optimal_tours:
+        # Show the last optimal (assumes curriculum order)
+        optimal = optimal_tours[-1]
+        axes[0, 0].axhline(y=optimal, color='green', linestyle='--', linewidth=2,
+                          label=f'Optimal ({optimal:.2f})', alpha=0.7)
     axes[0, 0].legend(loc='best', fontsize=8)
     axes[0, 0].grid(True, alpha=0.3)
     
     axes[0, 1].set_xlabel('Epoch')
     axes[0, 1].set_ylabel('Tour Length')
     axes[0, 1].set_title('Best Tour Length')
+    # Add optimal tour reference line if available
+    if optimal_tours:
+        optimal = optimal_tours[-1]
+        axes[0, 1].axhline(y=optimal, color='green', linestyle='--', linewidth=2,
+                          label=f'Optimal ({optimal:.2f})', alpha=0.7)
     axes[0, 1].legend(loc='best', fontsize=8)
     axes[0, 1].grid(True, alpha=0.3)
     
@@ -270,7 +290,7 @@ Examples:
   python plot_experiment.py --history p01_history.json p02_history.json --labels "p01" "p02"
   
   # Save to file instead of showing
-  python plot_experiment.py --history history.json --output results/experiment.png
+  
 """)
     
     parser.add_argument('--history', type=str, nargs='+', required=True,

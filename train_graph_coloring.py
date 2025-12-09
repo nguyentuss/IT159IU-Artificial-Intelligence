@@ -16,6 +16,17 @@ from ppo_combinatorial.models.graph_coloring_model import GraphColoringPolicyNet
 from ppo_combinatorial.core.ppo import compute_gae, compute_ppo_loss
 
 
+# Chromatic numbers for Mycielski graphs
+CHROMATIC_NUMBERS = {
+    'myciel2.col': 3,
+    'myciel3.col': 4,
+    'myciel4.col': 5,
+    'myciel5.col': 6,
+    'myciel6.col': 7,
+    'myciel7.col': 8,
+}
+
+
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description='Train PPO for Graph Coloring')
@@ -531,6 +542,7 @@ def train(args):
             'num_nodes': graph['num_nodes'],
             'num_edges': graph['num_edges'],
             'num_colors': args.num_colors,
+            'chromatic_number': CHROMATIC_NUMBERS.get(graph['name']),
             'args': vars(args),
             'history': history,
         }, f, indent=2)
