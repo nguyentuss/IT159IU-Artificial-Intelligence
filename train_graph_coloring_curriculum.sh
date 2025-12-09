@@ -7,8 +7,8 @@ set -e
 
 OUTPUT_DIR="./checkpoints/graph_coloring_curriculum"
 EXP_NAME="gc_curriculum"
-EPOCHS=100
-DEVICE="cpu"  # Change to cuda:0 for GPU
+EPOCHS=20
+DEVICE="cuda:1"  # Change to cuda:0 for GPU
 NUM_COLORS=8  # Fixed for all stages (myciel7 needs 8)
 
 echo "=== Graph Coloring Curriculum Training ==="
