@@ -1,20 +1,16 @@
 """
 Training Script for Knapsack Problem with PPO.
 
-Supports both random generation and static dataset loading.
+Uses static datasets (p01-p08) for curriculum learning.
 """
 
 import argparse
 import os
-import time
 import torch
 import torch.nn as nn
 import numpy as np
-import pandas as pd
-import ast
 from tqdm import tqdm
 
-from ppo_combinatorial.environments.knapsack_env import KnapsackEnvironment, generate_knapsack_instances
 from ppo_combinatorial.models.knapsack_model import KnapsackPolicyNetwork, KnapsackValueNetwork
 from ppo_combinatorial.core.ppo import compute_gae, compute_ppo_loss
 
@@ -23,29 +19,11 @@ def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description='Train PPO for Knapsack')
     
-    # Data source
-    parser.add_argument('--dataset_path', type=str, default=None,
-                        help='Path to CSV dataset (if None, use random generation)')
-    
-    # Problem parameters (used when dataset_path is None)
-    parser.add_argument('--num_items', type=int, default=50,
-                        help='Number of items N (or max items for curriculum)')
-    parser.add_argument('--capacity_ratio', type=float, default=0.5,
-                        help='Capacity ratio = C_max / total_weight (or min for curriculum)')
+    # Dataset
+    parser.add_argument('--data_dir', type=str, required=True,
+                        help='Path to dataset folder (e.g., data/knapsack/p01)')
     parser.add_argument('--batch_size', type=int, default=128,
-                        help='Number of parallel environments')
-    
-    # Curriculum learning
-    parser.add_argument('--curriculum', action='store_true',
-                        help='Enable curriculum learning (start easy, increase difficulty)')
-    parser.add_argument('--curriculum_start_items', type=int, default=5,
-                        help='Starting number of items for curriculum')
-    parser.add_argument('--curriculum_end_items', type=int, default=200,
-                        help='Final number of items for curriculum')
-    parser.add_argument('--curriculum_start_ratio', type=float, default=0.7,
-                        help='Starting capacity ratio (easier)')
-    parser.add_argument('--curriculum_end_ratio', type=float, default=0.3,
-                        help='Final capacity ratio (harder)')
+                        help='Number of parallel environments (copies of same instance)')
     
     # PPO hyperparameters
     parser.add_argument('--gamma', type=float, default=1.0,
@@ -63,16 +41,15 @@ def parse_args():
     parser.add_argument('--max_grad_norm', type=float, default=0.5,
                         help='Gradient clipping')
     parser.add_argument('--num_epochs', type=int, default=4,
-                        help='PPO epochs')
+                        help='PPO epochs per iteration')
     
     # Training parameters
-    parser.add_argument('--epochs', '--max_iterations', type=int, default=5000,
-                        dest='max_iterations',
-                        help='Number of training epochs/iterations')
+    parser.add_argument('--epochs', type=int, default=500,
+                        help='Number of training epochs')
     parser.add_argument('--log_interval', type=int, default=10,
-                        help='Log every N iterations')
+                        help='Log every N epochs')
     parser.add_argument('--save_interval', type=int, default=100,
-                        help='Save every N iterations')
+                        help='Save every N epochs')
     
     # Model parameters
     parser.add_argument('--embed_dim', type=int, default=64,
@@ -80,11 +57,9 @@ def parse_args():
     parser.add_argument('--hidden_dim', type=int, default=128,
                         help='MLP hidden dimension')
     
-    # Device
+    # Device and output
     parser.add_argument('--device', type=str, default='cpu')
     parser.add_argument('--output_dir', type=str, default='./checkpoints/knapsack')
-    
-    # Experiment name
     parser.add_argument('--exp_name', type=str, default='knapsack',
                         help='Experiment name for checkpoint files')
     
@@ -95,103 +70,80 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_dataset(csv_path, device='cpu'):
-    """Load knapsack dataset from CSV file."""
-    df = pd.read_csv(csv_path)
+def load_knapsack_dataset(data_dir, device='cpu'):
+    """
+    Load knapsack dataset from folder.
     
-    def parse_array(s):
-        s = s.strip().replace('[', '').replace(']', '')
-        return np.array([float(x) for x in s.split(',')])
+    Expected files:
+    - pXX_c.txt: capacity (single number)
+    - pXX_w.txt: weights (one per line)
+    - pXX_p.txt: profits/values (one per line)
+    - pXX_s.txt: optimal solution (one 0/1 per line)
+    """
+    # Find the prefix (p01, p02, etc.)
+    prefix = os.path.basename(data_dir)
     
-    all_data = []
+    # Read capacity
+    with open(os.path.join(data_dir, f'{prefix}_c.txt'), 'r') as f:
+        capacity = int(f.read().strip())
     
-    for _, row in df.iterrows():
-        weights = parse_array(str(row['Weights']))
-        values = parse_array(str(row['Values']))
-        capacity = float(row['Capacity'])
-        optimal = float(row['Optimal_Value'])
-        n = int(row['N'])
-        
-        all_data.append({
-            'n': n,
-            'weights': torch.tensor(weights, dtype=torch.float32, device=device),
-            'values': torch.tensor(values, dtype=torch.float32, device=device),
-            'capacity': torch.tensor([capacity], dtype=torch.float32, device=device),
-            'optimal': optimal,
-        })
+    # Read weights
+    with open(os.path.join(data_dir, f'{prefix}_w.txt'), 'r') as f:
+        weights = [int(line.strip()) for line in f if line.strip()]
     
-    return all_data
+    # Read values/profits
+    with open(os.path.join(data_dir, f'{prefix}_p.txt'), 'r') as f:
+        values = [int(line.strip()) for line in f if line.strip()]
+    
+    # Read optimal solution
+    with open(os.path.join(data_dir, f'{prefix}_s.txt'), 'r') as f:
+        optimal_selection = [int(line.strip()) for line in f if line.strip()]
+    
+    # Compute optimal value
+    optimal_value = sum(v * s for v, s in zip(values, optimal_selection))
+    
+    return {
+        'weights': torch.tensor(weights, dtype=torch.float32, device=device),
+        'values': torch.tensor(values, dtype=torch.float32, device=device),
+        'capacity': capacity,
+        'optimal_value': optimal_value,
+        'optimal_selection': optimal_selection,
+        'num_items': len(weights),
+        'name': prefix,
+    }
 
 
-class DatasetEnvironment:
-    """Environment that loads instances from a static dataset."""
+class StaticKnapsackEnvironment:
+    """Environment for a single static knapsack instance."""
     
-    def __init__(self, dataset, max_items, device='cpu'):
-        self.dataset = dataset
-        self.max_items = max_items
+    def __init__(self, dataset, batch_size=128, device='cpu'):
+        self.values = dataset['values'].unsqueeze(0).expand(batch_size, -1).clone()
+        self.weights = dataset['weights'].unsqueeze(0).expand(batch_size, -1).clone()
+        self.capacity = dataset['capacity']
+        self.num_items = dataset['num_items']
+        self.batch_size = batch_size
         self.device = device
-        self.current_batch = None
-        self.num_items = max_items
-        self.batch_size = 1
+        
+        self.total_value = self.values.sum(dim=-1)
+        self.total_weight = self.weights.sum(dim=-1)
         
         # State variables
-        self.values = None
-        self.weights = None
-        self.capacity = None
-        self.item_status = None
         self.current_weight = None
         self.current_value = None
         self.step_count = None
-        self.total_value = None
-        self.total_weight = None
     
-    def reset(self, batch_indices=None):
-        """Reset with instances from dataset."""
-        if batch_indices is None:
-            batch_indices = np.random.choice(len(self.dataset), size=1, replace=True)
-        
-        self.batch_size = len(batch_indices)
-        
-        # Pad instances to max_items
-        values_list = []
-        weights_list = []
-        capacity_list = []
-        
-        for idx in batch_indices:
-            inst = self.dataset[idx]
-            n = inst['n']
-            
-            # Pad to max_items
-            padded_values = torch.zeros(self.max_items, device=self.device)
-            padded_weights = torch.zeros(self.max_items, device=self.device)
-            
-            padded_values[:n] = inst['values']
-            padded_weights[:n] = inst['weights']
-            
-            values_list.append(padded_values)
-            weights_list.append(padded_weights)
-            capacity_list.append(inst['capacity'])
-        
-        self.values = torch.stack(values_list)
-        self.weights = torch.stack(weights_list)
-        self.capacity = torch.cat(capacity_list)
-        
-        self.total_weight = self.weights.sum(dim=-1)
-        self.total_value = self.values.sum(dim=-1)
-        
-        self.item_status = torch.zeros(
-            self.batch_size, self.max_items,
-            dtype=torch.float32, device=self.device
-        )
-        
+    def reset(self):
+        """Reset environment."""
         self.current_weight = torch.zeros(self.batch_size, device=self.device)
         self.current_value = torch.zeros(self.batch_size, device=self.device)
         self.step_count = 0
-        
         return self._get_state()
     
     def _get_state(self):
         """Get current state representation."""
+        t = self.step_count
+        
+        # Normalize features
         mean_value = self.values.mean(dim=-1, keepdim=True).clamp(min=1e-8)
         mean_weight = self.weights.mean(dim=-1, keepdim=True).clamp(min=1e-8)
         value_weight_ratio = self.values / (self.weights + 1e-8)
@@ -201,10 +153,9 @@ class DatasetEnvironment:
             self.values / mean_value,
             self.weights / mean_weight,
             value_weight_ratio / mean_ratio,
-            self.weights / self.capacity.unsqueeze(-1).clamp(min=1e-8),
+            self.weights / self.capacity,
         ], dim=-1)
         
-        t = self.step_count
         remaining_capacity = self.capacity - self.current_weight
         
         if t < self.num_items:
@@ -215,8 +166,8 @@ class DatasetEnvironment:
             current_item_value = torch.zeros(self.batch_size, device=self.device)
         
         context_features = torch.stack([
-            self.current_weight / self.capacity.clamp(min=1e-8),
-            remaining_capacity / self.capacity.clamp(min=1e-8),
+            self.current_weight / self.capacity,
+            remaining_capacity / self.capacity,
             self.current_value / self.total_value.clamp(min=1e-8),
             torch.full((self.batch_size,), t / self.num_items, device=self.device),
             remaining_capacity / current_item_weight.clamp(min=1e-8),
@@ -228,15 +179,12 @@ class DatasetEnvironment:
             'item_features': item_features,
             'context_features': context_features,
             'current_item_idx': torch.full((self.batch_size,), t, dtype=torch.long, device=self.device),
-            'current_item_value': current_item_value,
-            'current_item_weight': current_item_weight,
             'can_add_item': can_add,
             'values': self.values,
             'weights': self.weights,
-            'capacity': self.capacity,
+            'capacity': torch.full((self.batch_size,), self.capacity, device=self.device),
             'current_weight': self.current_weight,
             'current_value': self.current_value,
-            'remaining_capacity': remaining_capacity,
             'step': t,
         }
     
@@ -248,19 +196,15 @@ class DatasetEnvironment:
         current_weight = self.weights[:, t]
         current_value = self.values[:, t]
         
-        # Dense reward
-        alpha = 1.0
-        beta = 2.0
-        
+        # Dense reward with penalty for exceeding capacity
         normalized_value = current_value / self.total_value.clamp(min=1e-8)
         new_weight = self.current_weight + action * current_weight
         overflow = torch.clamp(new_weight - self.capacity, min=0)
-        normalized_overflow = overflow / self.capacity.clamp(min=1e-8)
+        normalized_overflow = overflow / self.capacity
         
-        reward = action * (alpha * normalized_value - beta * normalized_overflow)
+        reward = action * (normalized_value - 2.0 * normalized_overflow)
         
         # Update state
-        self.item_status[:, t] = action * 2 - 1
         self.current_weight = self.current_weight + action * current_weight
         self.current_value = self.current_value + action * current_value
         self.step_count += 1
@@ -273,13 +217,12 @@ class DatasetEnvironment:
             info['total_value'] = self.current_value.clone()
             info['total_weight'] = self.current_weight.clone()
             info['feasible'] = (self.current_weight <= self.capacity)
-            info['utilization'] = self.current_weight / self.capacity.clamp(min=1e-8)
         
         return self._get_state(), reward, done_tensor, info
 
 
 def collect_trajectories(env, policy, value_net, device):
-    """Collect trajectories for Knapsack problem."""
+    """Collect trajectories."""
     states_list = []
     actions_list = []
     rewards_list = []
@@ -344,7 +287,7 @@ def collect_trajectories(env, policy, value_net, device):
 
 
 def train_step(policy, value_net, optimizer, data, args):
-    """PPO update step for Knapsack."""
+    """PPO update step."""
     states_list = data['states']
     actions = data['actions']
     rewards = data['rewards']
@@ -420,33 +363,21 @@ def train_step(policy, value_net, optimizer, data, args):
 
 
 def train(args):
-    """Main training loop for Knapsack."""
+    """Main training loop."""
+    # Load dataset
+    print(f"Loading dataset from: {args.data_dir}")
+    dataset = load_knapsack_dataset(args.data_dir, args.device)
     
-    # Determine data source
-    if args.dataset_path:
-        print(f"Training Knapsack with static dataset: {args.dataset_path}")
-        dataset = load_dataset(args.dataset_path, args.device)
-        
-        # Find max items in dataset
-        max_items = max(inst['n'] for inst in dataset)
-        args.num_items = max_items
-        
-        env = DatasetEnvironment(dataset, max_items, args.device)
-        env.batch_size = args.batch_size
-        
-        print(f"  Loaded {len(dataset)} instances, max items: {max_items}")
-    else:
-        print(f"Training Knapsack with random data: {args.num_items} items")
-        env = KnapsackEnvironment(
-            num_items=args.num_items,
-            capacity_ratio=args.capacity_ratio,
-            batch_size=args.batch_size,
-            device=args.device
-        )
-    
+    print(f"  Instance: {dataset['name']}")
+    print(f"  Items: {dataset['num_items']}")
+    print(f"  Capacity: {dataset['capacity']}")
+    print(f"  Optimal value: {dataset['optimal_value']}")
     print(f"Device: {args.device}")
     
     os.makedirs(args.output_dir, exist_ok=True)
+    
+    # Create environment
+    env = StaticKnapsackEnvironment(dataset, args.batch_size, args.device)
     
     # Initialize networks
     policy = KnapsackPolicyNetwork(
@@ -464,86 +395,62 @@ def train(args):
         lr=args.learning_rate
     )
     
-    # Resume from checkpoint if specified
-    start_iteration = 1
+    # Resume from checkpoint (only loads weights, not epoch - for curriculum learning)
     if args.resume:
         print(f"Resuming from checkpoint: {args.resume}")
         checkpoint = torch.load(args.resume, map_location=args.device)
         policy.load_state_dict(checkpoint['policy_state_dict'])
         value_net.load_state_dict(checkpoint['value_net_state_dict'])
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        start_iteration = checkpoint['iteration'] + 1
-        print(f"  Resuming from iteration {start_iteration}")
+        # Don't restore optimizer state or epoch for curriculum (new dataset)
+        print(f"  Loaded weights, starting fresh epochs for new dataset")
     
     # Training loop
-    pbar = tqdm(range(start_iteration, args.max_iterations + 1), desc='Training')
+    pbar = tqdm(range(1, args.epochs + 1), desc=f'Training on {dataset["name"]}')
     
-    for iteration in pbar:
-        # Curriculum learning: adjust difficulty based on progress
-        if args.curriculum and not args.dataset_path:
-            progress = (iteration - 1) / args.max_iterations  # 0 to 1
-            
-            # Interpolate number of items
-            curr_items = int(args.curriculum_start_items + 
-                           progress * (args.curriculum_end_items - args.curriculum_start_items))
-            
-            # Interpolate capacity ratio (higher = easier)
-            curr_ratio = args.curriculum_start_ratio + \
-                        progress * (args.curriculum_end_ratio - args.curriculum_start_ratio)
-            
-            # Update environment
-            env.num_items = curr_items
-            env.capacity_ratio = curr_ratio
-            
-            # Display curriculum info periodically
-            if iteration % args.log_interval == 1:
-                pbar.set_description(f'Training [N={curr_items}, ratio={curr_ratio:.2f}]')
-        
-        # For dataset mode, sample a batch of instances
-        if args.dataset_path:
-            batch_indices = np.random.choice(len(dataset), size=args.batch_size, replace=True)
-            env.reset(batch_indices)
-        
+    for epoch in pbar:
         data = collect_trajectories(env, policy, value_net, args.device)
         metrics = train_step(policy, value_net, optimizer, data, args)
         
         info = data['info']
         avg_value = info['total_value'].mean().item()
-        avg_weight = info['total_weight'].mean().item()
         feasible_ratio = info['feasible'].float().mean().item()
+        opt_ratio = avg_value / dataset['optimal_value'] * 100
         
         pbar.set_postfix({
-            'value': f"{avg_value:.2f}",
-            'feasible': f"{feasible_ratio:.2%}",
-            'entropy': f"{metrics['entropy']:.4f}",
+            'value': f"{avg_value:.1f}/{dataset['optimal_value']}",
+            'opt%': f"{opt_ratio:.1f}%",
+            'feasible': f"{feasible_ratio:.0%}",
         })
         
-        if iteration % args.log_interval == 0:
-            print(f"\nIteration {iteration}:")
-            print(f"  Total Value: {avg_value:.2f}")
-            print(f"  Total Weight: {avg_weight:.2f}")
-            print(f"  Feasible Rate: {feasible_ratio:.2%}")
+        if epoch % args.log_interval == 0:
+            print(f"\nEpoch {epoch}:")
+            print(f"  Value: {avg_value:.2f} / {dataset['optimal_value']} ({opt_ratio:.1f}%)")
+            print(f"  Feasible: {feasible_ratio:.0%}")
             print(f"  Policy Loss: {metrics['policy_loss']:.6f}")
-            print(f"  Value Loss: {metrics['value_loss']:.6f}")
         
-        if iteration % args.save_interval == 0:
+        if epoch % args.save_interval == 0:
             checkpoint = {
-                'iteration': iteration,
+                'epoch': epoch,
                 'policy_state_dict': policy.state_dict(),
                 'value_net_state_dict': value_net.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'args': vars(args),
+                'dataset': dataset['name'],
             }
-            path = os.path.join(args.output_dir, f'{args.exp_name}_epoch{iteration}.pt')
+            path = os.path.join(args.output_dir, f'{args.exp_name}_epoch{epoch}.pt')
             torch.save(checkpoint, path)
     
     print("\nTraining completed!")
     
+    # Save final model
     final_path = os.path.join(args.output_dir, f'{args.exp_name}_final.pt')
     torch.save({
+        'epoch': args.epochs,
         'policy_state_dict': policy.state_dict(),
         'value_net_state_dict': value_net.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
         'args': vars(args),
+        'dataset': dataset['name'],
     }, final_path)
     print(f"Saved final model to {final_path}")
 

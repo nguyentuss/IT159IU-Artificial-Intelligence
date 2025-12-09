@@ -1,16 +1,16 @@
 """
 Training Script for Graph Coloring with PPO.
+
+Uses static DIMACS .col format graphs for curriculum learning.
 """
 
 import argparse
 import os
-import time
 import torch
 import torch.nn as nn
 import numpy as np
 from tqdm import tqdm
 
-from ppo_combinatorial.environments.graph_coloring_env import GraphColoringEnvironment, generate_graph_instances
 from ppo_combinatorial.models.graph_coloring_model import GraphColoringPolicyNetwork, GraphColoringValueNetwork
 from ppo_combinatorial.core.ppo import compute_gae, compute_ppo_loss
 
@@ -19,13 +19,11 @@ def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description='Train PPO for Graph Coloring')
     
-    # Problem parameters
-    parser.add_argument('--num_nodes', type=int, default=50,
-                        help='Number of nodes N')
+    # Dataset
+    parser.add_argument('--graph_file', type=str, required=True,
+                        help='Path to DIMACS .col graph file')
     parser.add_argument('--num_colors', type=int, default=5,
                         help='Number of available colors K')
-    parser.add_argument('--edge_probability', type=float, default=0.3,
-                        help='Edge probability for random graphs')
     parser.add_argument('--batch_size', type=int, default=128,
                         help='Number of parallel environments')
     
@@ -48,12 +46,12 @@ def parse_args():
                         help='PPO epochs')
     
     # Training parameters
-    parser.add_argument('--max_iterations', type=int, default=500,
-                        help='Maximum training iterations')
+    parser.add_argument('--epochs', type=int, default=500,
+                        help='Number of training epochs')
     parser.add_argument('--log_interval', type=int, default=10,
-                        help='Log every N iterations')
+                        help='Log every N epochs')
     parser.add_argument('--save_interval', type=int, default=100,
-                        help='Save every N iterations')
+                        help='Save every N epochs')
     
     # Model parameters
     parser.add_argument('--embed_dim', type=int, default=64,
@@ -63,20 +61,213 @@ def parse_args():
     parser.add_argument('--hidden_dim', type=int, default=128,
                         help='MLP hidden dimension')
     
-    # Device
+    # Device and output
     parser.add_argument('--device', type=str, default='cpu')
     parser.add_argument('--output_dir', type=str, default='./checkpoints/graph_coloring')
+    parser.add_argument('--exp_name', type=str, default='graph_coloring',
+                        help='Experiment name for checkpoint files')
+    
+    # Resume training
+    parser.add_argument('--resume', type=str, default=None,
+                        help='Path to checkpoint to resume training from')
     
     return parser.parse_args()
 
 
-def collect_trajectories(
-    env: GraphColoringEnvironment,
-    policy: GraphColoringPolicyNetwork,
-    value_net: GraphColoringValueNetwork,
-    device: str
-) -> dict:
-    """Collect trajectories for Graph Coloring."""
+def load_dimacs_graph(file_path, device='cpu'):
+    """
+    Load graph from DIMACS .col format or simple edge list format.
+    
+    DIMACS format:
+        c comment lines
+        p edge <num_nodes> <num_edges>
+        e <node1> <node2>
+    
+    Simple format:
+        <num_nodes> <num_edges>
+        <node1> <node2>
+        ...
+    """
+    num_nodes = 0
+    num_edges_expected = 0
+    edges = []
+    is_dimacs = False
+    first_line = True
+    
+    with open(file_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('c'):
+                continue
+            
+            parts = line.split()
+            
+            # Check for DIMACS format
+            if parts[0] == 'p':
+                is_dimacs = True
+                num_nodes = int(parts[2])
+                num_edges_expected = int(parts[3])
+            elif parts[0] == 'e':
+                # DIMACS edge line
+                u = int(parts[1]) - 1
+                v = int(parts[2]) - 1
+                edges.append((u, v))
+            elif first_line and len(parts) == 2:
+                # Simple format: first line is "num_nodes num_edges"
+                try:
+                    num_nodes = int(parts[0])
+                    num_edges_expected = int(parts[1])
+                    first_line = False
+                except ValueError:
+                    pass
+            elif not is_dimacs and len(parts) >= 2:
+                # Simple format: edge lines are "node1 node2"
+                try:
+                    u = int(parts[0]) - 1
+                    v = int(parts[1]) - 1
+                    edges.append((u, v))
+                except ValueError:
+                    pass
+            
+            first_line = False
+    
+    if num_nodes == 0:
+        raise ValueError(f"Could not parse graph from {file_path}")
+    
+    # Build adjacency matrix
+    adj = torch.zeros(num_nodes, num_nodes, device=device)
+    for u, v in edges:
+        if 0 <= u < num_nodes and 0 <= v < num_nodes:
+            adj[u, v] = 1
+            adj[v, u] = 1
+    
+    # Compute degrees
+    degrees = adj.sum(dim=-1)
+    
+    return {
+        'adjacency': adj,
+        'num_nodes': num_nodes,
+        'num_edges': len(edges),
+        'degrees': degrees,
+        'name': os.path.basename(file_path),
+    }
+
+
+class StaticGraphColoringEnvironment:
+    """Environment for a single static graph coloring instance."""
+    
+    def __init__(self, graph, num_colors, batch_size=128, device='cpu'):
+        self.num_nodes = graph['num_nodes']
+        self.num_colors = num_colors
+        self.batch_size = batch_size
+        self.device = device
+        
+        # Expand graph for batch
+        self.adjacency = graph['adjacency'].unsqueeze(0).expand(batch_size, -1, -1).clone()
+        self.degrees = graph['degrees'].unsqueeze(0).expand(batch_size, -1).clone()
+        
+        # State variables
+        self.colors = None
+        self.step_count = None
+        self.colors_used = None
+        self.conflicts = None
+    
+    def reset(self):
+        """Reset environment."""
+        self.colors = torch.zeros(self.batch_size, self.num_nodes, dtype=torch.long, device=self.device)
+        self.step_count = 0
+        self.colors_used = torch.zeros(self.batch_size, device=self.device)
+        self.conflicts = torch.zeros(self.batch_size, device=self.device)
+        return self._get_state()
+    
+    def _get_state(self):
+        """Get current state."""
+        t = min(self.step_count, self.num_nodes - 1)
+        
+        # Color one-hot encoding
+        color_onehot = torch.zeros(self.batch_size, self.num_nodes, self.num_colors + 1, device=self.device)
+        for i in range(self.batch_size):
+            for n in range(self.num_nodes):
+                c = self.colors[i, n].item()
+                color_onehot[i, n, c] = 1.0
+        
+        # Current node indicator
+        is_current = torch.zeros(self.batch_size, self.num_nodes, device=self.device)
+        is_current[:, t] = 1.0
+        
+        # Blocked colors for current node (0-indexed for colors 1 to num_colors)
+        # Use float for compatibility with model
+        blocked = torch.zeros(self.batch_size, self.num_colors, device=self.device)
+        for i in range(self.batch_size):
+            neighbors = self.adjacency[i, t, :].nonzero(as_tuple=True)[0]
+            for n in neighbors:
+                c = self.colors[i, n].item()
+                if c > 0 and c <= self.num_colors:  # c is 1-indexed, convert to 0-indexed
+                    blocked[i, c - 1] = 1.0
+        
+        # Valid actions (unblocked colors) - ensure at least one is valid
+        valid = (blocked == 0)
+        # If all blocked, allow all (force a conflict, better than NaN)
+        all_blocked = ~valid.any(dim=-1, keepdim=True)
+        valid = valid | all_blocked.expand_as(valid)
+        
+        return {
+            'adjacency': self.adjacency,
+            'colors': self.colors,
+            'color_onehot': color_onehot,
+            'degrees': self.degrees,
+            'is_current_node': is_current,
+            'current_node': torch.full((self.batch_size,), t, dtype=torch.long, device=self.device),
+            'blocked_colors': blocked,
+            'valid_actions': valid,
+            'conflicts': self.conflicts.clone(),
+            'colors_used': self.colors_used.clone(),
+            'step': t,
+        }
+    
+    def step(self, action):
+        """Execute action (1-indexed color)."""
+        t = self.step_count
+        
+        # Check for conflicts
+        new_conflicts = torch.zeros(self.batch_size, device=self.device)
+        for i in range(self.batch_size):
+            neighbors = self.adjacency[i, t, :].nonzero(as_tuple=True)[0]
+            for n in neighbors:
+                if self.colors[i, n] == action[i]:
+                    new_conflicts[i] += 1
+        
+        # Track new colors
+        was_new_color = torch.zeros(self.batch_size, device=self.device)
+        for i in range(self.batch_size):
+            c = action[i].item()
+            used_colors = set(self.colors[i].tolist()) - {0}
+            if c not in used_colors:
+                was_new_color[i] = 1.0
+                self.colors_used[i] += 1
+        
+        # Assign colors
+        self.colors[:, t] = action
+        self.conflicts += new_conflicts
+        self.step_count += 1
+        
+        # Reward: penalize conflicts and new colors
+        reward = -1.0 * new_conflicts - 0.1 * was_new_color
+        
+        done = self.step_count >= self.num_nodes
+        done_tensor = torch.full((self.batch_size,), done, dtype=torch.bool, device=self.device)
+        
+        info = {}
+        if done:
+            info['total_conflicts'] = self.conflicts.clone()
+            info['colors_used'] = self.colors_used.clone()
+            info['is_valid_coloring'] = (self.conflicts == 0)
+        
+        return self._get_state(), reward, done_tensor, info
+
+
+def collect_trajectories(env, policy, value_net, device):
+    """Collect trajectories."""
     states_list = []
     actions_list = []
     rewards_list = []
@@ -87,7 +278,6 @@ def collect_trajectories(
     state = env.reset()
     
     for t in range(env.num_nodes):
-        # Store state
         states_list.append({
             'adjacency': state['adjacency'].clone(),
             'colors': state['colors'].clone(),
@@ -99,22 +289,19 @@ def collect_trajectories(
             'valid_actions': state['valid_actions'].clone(),
             'conflicts': state['conflicts'].clone(),
             'colors_used': state['colors_used'].clone(),
-            'step': t,  # Add step index
+            'step': t,
         })
         
-        # Get value estimate
         with torch.no_grad():
             value = value_net(state).squeeze(-1)
         values_list.append(value)
         
-        # Sample action (returns 1-indexed color)
         with torch.no_grad():
             action, log_prob, _ = policy.sample_action(state)
         
         actions_list.append(action)
         log_probs_list.append(log_prob)
         
-        # Environment step
         next_state, reward, done, info = env.step(action)
         
         rewards_list.append(reward)
@@ -122,11 +309,9 @@ def collect_trajectories(
         
         state = next_state
     
-    # Final value
     with torch.no_grad():
         final_value = value_net(state).squeeze(-1)
     
-    # Stack tensors
     actions = torch.stack(actions_list, dim=1)
     rewards = torch.stack(rewards_list, dim=1)
     log_probs = torch.stack(log_probs_list, dim=1)
@@ -147,14 +332,8 @@ def collect_trajectories(
     }
 
 
-def train_step(
-    policy: GraphColoringPolicyNetwork,
-    value_net: GraphColoringValueNetwork,
-    optimizer: torch.optim.Optimizer,
-    data: dict,
-    args
-) -> dict:
-    """PPO update step for Graph Coloring."""
+def train_step(policy, value_net, optimizer, data, args):
+    """PPO update step."""
     states_list = data['states']
     actions = data['actions']
     rewards = data['rewards']
@@ -163,7 +342,6 @@ def train_step(
     next_values = data['next_values']
     dones = data['dones']
     
-    # Compute GAE
     advantages, returns = compute_gae(
         rewards=rewards,
         values=old_values,
@@ -173,7 +351,6 @@ def train_step(
         lambda_gae=args.lambda_gae
     )
     
-    # Normalize advantages
     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
     
     all_metrics = []
@@ -184,11 +361,10 @@ def train_step(
         epoch_values = []
         
         for t, state in enumerate(states_list):
-            # Get current policy output
             action_probs, _ = policy(state)
             dist = torch.distributions.Categorical(action_probs)
             
-            # Convert 1-indexed action to 0-indexed
+            # Convert 1-indexed action to 0-indexed for log_prob
             action_idx = actions[:, t] - 1
             
             log_prob = dist.log_prob(action_idx)
@@ -236,21 +412,21 @@ def train_step(
 
 
 def train(args):
-    """Main training loop for Graph Coloring."""
-    print(f"Training Graph Coloring with {args.num_nodes} nodes, {args.num_colors} colors")
-    print(f"Edge probability: {args.edge_probability}")
+    """Main training loop."""
+    # Load graph
+    print(f"Loading graph from: {args.graph_file}")
+    graph = load_dimacs_graph(args.graph_file, args.device)
+    
+    print(f"  Graph: {graph['name']}")
+    print(f"  Nodes: {graph['num_nodes']}")
+    print(f"  Edges: {graph['num_edges']}")
+    print(f"  Colors: {args.num_colors}")
     print(f"Device: {args.device}")
     
     os.makedirs(args.output_dir, exist_ok=True)
     
-    # Initialize environment
-    env = GraphColoringEnvironment(
-        num_nodes=args.num_nodes,
-        num_colors=args.num_colors,
-        edge_probability=args.edge_probability,
-        batch_size=args.batch_size,
-        device=args.device
-    )
+    # Create environment
+    env = StaticGraphColoringEnvironment(graph, args.num_colors, args.batch_size, args.device)
     
     # Initialize networks
     policy = GraphColoringPolicyNetwork(
@@ -267,59 +443,68 @@ def train(args):
         hidden_dim=args.hidden_dim,
     ).to(args.device)
     
-    # Optimizer
     optimizer = torch.optim.Adam(
         list(policy.parameters()) + list(value_net.parameters()),
         lr=args.learning_rate
     )
     
-    # Training loop
-    pbar = tqdm(range(1, args.max_iterations + 1), desc='Training')
+    # Resume from checkpoint (only loads weights, not epoch - for curriculum learning)
+    if args.resume:
+        print(f"Resuming from checkpoint: {args.resume}")
+        checkpoint = torch.load(args.resume, map_location=args.device)
+        policy.load_state_dict(checkpoint['policy_state_dict'])
+        value_net.load_state_dict(checkpoint['value_net_state_dict'])
+        # Don't restore optimizer state or epoch for curriculum (new dataset)
+        print(f"  Loaded weights, starting fresh epochs for new dataset")
     
-    for iteration in pbar:
+    # Training loop
+    pbar = tqdm(range(1, args.epochs + 1), desc=f'Training on {graph["name"]}')
+    
+    for epoch in pbar:
         data = collect_trajectories(env, policy, value_net, args.device)
         metrics = train_step(policy, value_net, optimizer, data, args)
         
-        # Metrics from last step
         info = data['info']
         avg_conflicts = info['total_conflicts'].mean().item()
         avg_colors = info['colors_used'].mean().item()
         valid_ratio = info['is_valid_coloring'].float().mean().item()
         
         pbar.set_postfix({
-            'conflicts': f"{avg_conflicts:.2f}",
-            'colors': f"{avg_colors:.2f}",
-            'valid': f"{valid_ratio:.2%}",
+            'conflicts': f"{avg_conflicts:.1f}",
+            'colors': f"{avg_colors:.1f}",
+            'valid': f"{valid_ratio:.0%}",
         })
         
-        if iteration % args.log_interval == 0:
-            print(f"\nIteration {iteration}:")
-            print(f"  Avg Conflicts: {avg_conflicts:.2f}")
-            print(f"  Avg Colors Used: {avg_colors:.2f}")
-            print(f"  Valid Coloring Rate: {valid_ratio:.2%}")
+        if epoch % args.log_interval == 0:
+            print(f"\nEpoch {epoch}:")
+            print(f"  Conflicts: {avg_conflicts:.2f}")
+            print(f"  Colors: {avg_colors:.2f}")
+            print(f"  Valid: {valid_ratio:.0%}")
             print(f"  Policy Loss: {metrics['policy_loss']:.6f}")
-            print(f"  Value Loss: {metrics['value_loss']:.6f}")
-            print(f"  Entropy: {metrics['entropy']:.4f}")
         
-        if iteration % args.save_interval == 0:
+        if epoch % args.save_interval == 0:
             checkpoint = {
-                'iteration': iteration,
+                'epoch': epoch,
                 'policy_state_dict': policy.state_dict(),
                 'value_net_state_dict': value_net.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'args': vars(args),
+                'graph': graph['name'],
             }
-            path = os.path.join(args.output_dir, f'checkpoint_{iteration}.pt')
+            path = os.path.join(args.output_dir, f'{args.exp_name}_epoch{epoch}.pt')
             torch.save(checkpoint, path)
     
     print("\nTraining completed!")
     
     # Save final model
-    final_path = os.path.join(args.output_dir, 'final_model.pt')
+    final_path = os.path.join(args.output_dir, f'{args.exp_name}_final.pt')
     torch.save({
+        'epoch': args.epochs,
         'policy_state_dict': policy.state_dict(),
         'value_net_state_dict': value_net.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
         'args': vars(args),
+        'graph': graph['name'],
     }, final_path)
     print(f"Saved final model to {final_path}")
 
