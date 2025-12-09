@@ -28,4 +28,9 @@ Thumbs.db
 # Jupyter
 .ipynb_checkpoints/
 
+ppo_combinatorial/__pycache__/
+ppo_combinatorial/core/__pycache__/
+ppo_combinatorial/models/__pycache__/
+ppo_combinatorial/utils/__pycache__/
+
 docs/
