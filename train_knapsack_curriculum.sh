@@ -7,7 +7,7 @@ set -e
 OUTPUT_DIR="./checkpoints/knapsack_curriculum"
 EXP_NAME="knapsack_curriculum"
 EPOCHS=100
-DEVICE="cpu"  # Change to cuda:0 for GPU
+DEVICE="cuda:1"
 BATCH_SIZE=512  
 
 echo "=== Knapsack Curriculum Training ==="

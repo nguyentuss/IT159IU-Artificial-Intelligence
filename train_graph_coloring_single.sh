@@ -2,8 +2,8 @@
 # Train each graph coloring instance independently (no curriculum)
 # Each instance starts fresh without resuming from previous
 
-DEVICE="cuda:0"
-EPOCHS=500
+DEVICE="cuda:1"
+EPOCHS=30
 OUTPUT_DIR="./checkpoints/graph_coloring_single"
 
 # Create output directory
@@ -23,7 +23,7 @@ CHROMATIC[myciel6]=7
 CHROMATIC[myciel7]=8
 
 # Train each instance independently
-for graph in myciel2 myciel3 myciel4 myciel5 myciel6 myciel7; do
+for graph in myciel7; do
     NUM_COLORS=${CHROMATIC[$graph]}
     
     echo ""
@@ -36,7 +36,7 @@ for graph in myciel2 myciel3 myciel4 myciel5 myciel6 myciel7; do
         --graph_file data/graph_coloring/${graph}.col \
         --num_colors $NUM_COLORS \
         --epochs $EPOCHS \
-        --batch_size 512 \
+        --batch_size 128 \
         --device $DEVICE \
         --output_dir $OUTPUT_DIR \
         --exp_name "${graph}_single"

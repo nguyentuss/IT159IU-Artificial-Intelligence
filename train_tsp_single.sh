@@ -2,8 +2,8 @@
 # Train each TSP instance independently (no curriculum)
 # Each instance starts fresh without resuming from previous
 
-DEVICE="cuda:0"
-EPOCHS=500
+DEVICE="cuda:1"
+EPOCHS=30
 OUTPUT_DIR="./checkpoints/tsp_single"
 
 # Create output directory

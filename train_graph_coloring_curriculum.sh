@@ -10,7 +10,7 @@ EXP_NAME="gc_curriculum"
 EPOCHS=20
 DEVICE="cuda:1"  # Change to cuda:0 for GPU
 NUM_COLORS=8  # Fixed for all stages (myciel7 needs 8)
-BATCH_SIZE=512 
+BATCH_SIZE=128 
 
 echo "=== Graph Coloring Curriculum Training ==="
 echo "Output: $OUTPUT_DIR"
