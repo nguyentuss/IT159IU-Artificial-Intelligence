@@ -8,7 +8,7 @@ OUTPUT_DIR="./checkpoints/knapsack_curriculum"
 EXP_NAME="knapsack_curriculum"
 EPOCHS=100
 DEVICE="cpu"  # Change to cuda:0 for GPU
-BATCH_SIZE=512  # Increase for better GPU utilization (1024+ for A100)
+BATCH_SIZE=512  
 
 echo "=== Knapsack Curriculum Training ==="
 echo "Output: $OUTPUT_DIR"

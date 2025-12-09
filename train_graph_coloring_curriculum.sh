@@ -10,6 +10,7 @@ EXP_NAME="gc_curriculum"
 EPOCHS=20
 DEVICE="cuda:1"  # Change to cuda:0 for GPU
 NUM_COLORS=8  # Fixed for all stages (myciel7 needs 8)
+BATCH_SIZE=512 
 
 echo "=== Graph Coloring Curriculum Training ==="
 echo "Output: $OUTPUT_DIR"
@@ -25,6 +26,7 @@ python train_graph_coloring.py \
     --epochs $EPOCHS \
     --output_dir $OUTPUT_DIR \
     --exp_name ${EXP_NAME}_myciel2 \
+    --batch_size $BATCH_SIZE \
     --device $DEVICE
 
 # myciel3 - 11 nodes
@@ -35,6 +37,7 @@ python train_graph_coloring.py \
     --epochs $EPOCHS \
     --output_dir $OUTPUT_DIR \
     --exp_name ${EXP_NAME}_myciel3 \
+    --batch_size $BATCH_SIZE \
     --resume ${OUTPUT_DIR}/${EXP_NAME}_myciel2_final.pt \
     --device $DEVICE
 

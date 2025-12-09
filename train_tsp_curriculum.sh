@@ -8,7 +8,7 @@ OUTPUT_DIR="./checkpoints/tsp_curriculum"
 EXP_NAME="tsp_curriculum"
 EPOCHS=30
 DEVICE="cuda:1"  # Change to cuda:0 for GPU
-BATCH_SIZE=128
+BATCH_SIZE=1024
 
 echo "=== TSP Curriculum Training ==="
 echo "Output: $OUTPUT_DIR"
@@ -27,7 +27,7 @@ python train_tsp.py \
 # small-1 - 20 cities
 echo "[2/4] Training on small-1.csv (20 cities)..."
 python train_tsp.py \
-    --data_file data/tsp/small.csv \
+    --data_file data/tsp/small-1.csv \
     --epochs $EPOCHS \
     --output_dir $OUTPUT_DIR \
     --exp_name ${EXP_NAME}_small-1 \
@@ -36,9 +36,9 @@ python train_tsp.py \
 
 
 # small-2 - 25 cities
-echo "[2/4] Training on small-1.csv (25 cities)..."
+echo "[3/4] Training on small-1.csv (25 cities)..."
 python train_tsp.py \
-    --data_file data/tsp/small.csv \
+    --data_file data/tsp/small-2.csv \
     --epochs $EPOCHS \
     --output_dir $OUTPUT_DIR \
     --exp_name ${EXP_NAME}_small-2 \
@@ -55,11 +55,11 @@ python train_tsp.py \
     --resume ${OUTPUT_DIR}/${EXP_NAME}_small-2_final.pt \
     --batch_size $BATCH_SIZE --device $DEVICE
 
-# # medium - 100 cities
+# # medium - 100 cities (using only 128 epochs)
 # echo "[3/4] Training on medium.csv (100 cities)..."
 # python train_tsp.py \
 #     --data_file data/tsp/medium.csv \
-#     --epochs $EPOCHS \
+#     --epochs 128 \
 #     --output_dir $OUTPUT_DIR \
 #     --exp_name ${EXP_NAME}_medium \
 #     --resume ${OUTPUT_DIR}/${EXP_NAME}_small_final.pt \
