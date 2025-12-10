@@ -1,0 +1,76 @@
+{
+  "graph_coloring": [
+    {
+      "graph": "myciel2",
+      "n": 5,
+      "edges": 5,
+      "ppo_best": 3,
+      "ppo_avg": 3.0,
+      "greedy": 3,
+      "chromatic": 2,
+      "gap": 1,
+      "ppo_time_ms": 5.333924293518066,
+      "greedy_time_ms": 0.008106231689453125
+    },
+    {
+      "graph": "myciel3",
+      "n": 11,
+      "edges": 20,
+      "ppo_best": 4,
+      "ppo_avg": 4.0,
+      "greedy": 4,
+      "chromatic": 4,
+      "gap": 0,
+      "ppo_time_ms": 4.713916778564453,
+      "greedy_time_ms": 0.013113021850585938
+    },
+    {
+      "graph": "myciel4",
+      "n": 23,
+      "edges": 71,
+      "ppo_best": 5,
+      "ppo_avg": 5.0,
+      "greedy": 5,
+      "chromatic": 5,
+      "gap": 0,
+      "ppo_time_ms": 10.771584510803223,
+      "greedy_time_ms": 0.04506111145019531
+    },
+    {
+      "graph": "myciel5",
+      "n": 47,
+      "edges": 236,
+      "ppo_best": 6,
+      "ppo_avg": 6.0,
+      "greedy": 6,
+      "chromatic": 6,
+      "gap": 0,
+      "ppo_time_ms": 26.388025283813477,
+      "greedy_time_ms": 0.1518726348876953
+    },
+    {
+      "graph": "myciel6",
+      "n": 95,
+      "edges": 755,
+      "ppo_best": 7,
+      "ppo_avg": 7.0,
+      "greedy": 7,
+      "chromatic": 7,
+      "gap": 0,
+      "ppo_time_ms": 71.3918924331665,
+      "greedy_time_ms": 0.5853176116943359
+    },
+    {
+      "graph": "myciel7",
+      "n": 191,
+      "edges": 2360,
+      "ppo_best": 8,
+      "ppo_avg": 8.0,
+      "greedy": 8,
+      "chromatic": 8,
+      "gap": 0,
+      "ppo_time_ms": 69.85781192779541,
+      "greedy_time_ms": 2.174854278564453
+    }
+  ]
+}
