@@ -29,4 +29,5 @@ Thumbs.db
 .ipynb_checkpoints/
 
 # Docs (if you want to exclude)
-docs/
+docs/appendix_ppo_combinatorial.pdf
+docs/ppo_combinatorial_tutorial.pdf
